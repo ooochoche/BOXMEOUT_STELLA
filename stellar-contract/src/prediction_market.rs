@@ -56,7 +56,28 @@ impl PredictionMarketContract {
         env: Env,
         new_admin: Address,
     ) -> Result<(), PredictionMarketError> {
-        todo!("Implement admin transfer")
+        // Load Global Config from persistent storage
+        let mut config: Config = env
+            .storage()
+            .persistent()
+            .get(&crate::storage::DataKey::Config)
+            .ok_or(PredictionMarketError::NotInitialized)?;
+
+        // Require auth from current administrative address
+        config.admin.require_auth();
+
+        let old_admin = config.admin.clone();
+        config.admin = new_admin.clone();
+
+        // Persist updated config back to storage
+        env.storage()
+            .persistent()
+            .set(&crate::storage::DataKey::Config, &config);
+
+        // Emit standard transfer event
+        crate::events::admin_updated(&env, old_admin, new_admin);
+
+        Ok(())
     }
 
     /// Update the protocol/LP/creator fee split that applies to new markets.

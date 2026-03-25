@@ -33,7 +33,8 @@ pub fn initialized(env: &Env, admin: Address) {
 /// - Topics: [symbol!("admin_updated")]
 /// - Data:   (old_admin: Address, new_admin: Address)
 pub fn admin_updated(env: &Env, old_admin: Address, new_admin: Address) {
-    todo!("Emit admin_updated event")
+    let topics = (soroban_sdk::Symbol::new(env, "admin_updated"),);
+    env.events().publish(topics, (old_admin, new_admin));
 }
 
 /// Emitted when the fee configuration is changed.
