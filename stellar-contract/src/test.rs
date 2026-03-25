@@ -98,3 +98,32 @@ fn test_old_admin_loses_rights() {
         assert_eq!(config.admin, third_admin);
     });
 }
+
+#[test]
+fn test_set_treasury_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_admin, client) = setup_test(&env);
+    let new_treasury = Address::generate(&env);
+
+    client.set_treasury(&new_treasury);
+
+    // Verify storage update
+    env.as_contract(&client.address, || {
+        let config: Config = env.storage().persistent().get(&DataKey::Config).unwrap();
+        assert_eq!(config.treasury, new_treasury);
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_set_treasury_unauthorized() {
+    let env = Env::default();
+    // env.mock_all_auths(); // No mock auth implies unauthorized
+
+    let (_admin, client) = setup_test(&env);
+    let new_treasury = Address::generate(&env);
+
+    client.set_treasury(&new_treasury);
+}

@@ -104,7 +104,27 @@ impl PredictionMarketContract {
         env: Env,
         new_treasury: Address,
     ) -> Result<(), PredictionMarketError> {
-        todo!("Implement treasury update")
+        // Load Global Config from persistent storage
+        let mut config: Config = env
+            .storage()
+            .persistent()
+            .get(&crate::storage::DataKey::Config)
+            .ok_or(PredictionMarketError::NotInitialized)?;
+
+        // Require auth from the current administrative address
+        config.admin.require_auth();
+
+        config.treasury = new_treasury.clone();
+
+        // Persist updated config back to storage
+        env.storage()
+            .persistent()
+            .set(&crate::storage::DataKey::Config, &config);
+
+        // Emit standard treasury update event
+        crate::events::treasury_updated(&env, new_treasury);
+
+        Ok(())
     }
 
     /// Update the minimum bond required to file a dispute.

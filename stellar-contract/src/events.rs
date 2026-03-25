@@ -57,7 +57,8 @@ pub fn fee_config_updated(
 /// - Topics: [symbol!("treasury_upd")]
 /// - Data:   (new_treasury: Address)
 pub fn treasury_updated(env: &Env, new_treasury: Address) {
-    todo!("Emit treasury_updated event")
+    let topics = (soroban_sdk::Symbol::new(env, "treasury_updated"),);
+    env.events().publish(topics, (new_treasury,));
 }
 
 /// Emitted when the global emergency pause is activated.
