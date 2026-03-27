@@ -1,7 +1,9 @@
 #![cfg(test)]
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};
-use crate::types::{Config, FeeConfig, UserPosition, Market, MarketMetadata};
+use crate::types::{
+    Config, FeeConfig, Market, MarketMetadata, MarketStatus, OracleReport, Outcome, UserPosition,
+};
 use crate::storage::DataKey;
 use crate::prediction_market::{PredictionMarketContract, PredictionMarketContractClient};
 
@@ -333,6 +335,95 @@ fn get_token_address(env: &Env, client: &PredictionMarketContractClient) -> Addr
         let config: Config = env.storage().persistent().get(&DataKey::Config).unwrap();
         config.token
     })
+}
+
+fn create_reported_market(
+    env: &Env,
+    client_address: &Address,
+    market_id: u64,
+    creator: &Address,
+    dispute_window_secs: u64,
+    reported_at: u64,
+    proposed_outcome_id: u32,
+) -> Market {
+    let mut market = create_test_market(env, client_address, market_id, creator);
+    market.status = MarketStatus::Reported;
+    market.dispute_window_secs = dispute_window_secs;
+    market.total_collateral = 10_000;
+    market.total_lp_shares = 1_000;
+    market.outcomes = soroban_sdk::vec![
+        env,
+        Outcome {
+            id: 0,
+            label: soroban_sdk::String::from_str(env, "Yes"),
+            total_shares_outstanding: 0,
+        },
+        Outcome {
+            id: 1,
+            label: soroban_sdk::String::from_str(env, "No"),
+            total_shares_outstanding: 0,
+        },
+    ];
+
+    let report = OracleReport {
+        market_id,
+        proposed_outcome_id,
+        reported_at,
+        disputed: false,
+        dispute_bond: 0,
+    };
+
+    env.as_contract(client_address, || {
+        env.storage().persistent().set(&DataKey::Market(market_id), &market);
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleReport(market_id), &report);
+    });
+
+    market
+}
+
+#[test]
+#[should_panic]
+fn test_finalize_resolution_before_window_expires_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, client) = setup_test(&env);
+    let market_id = 77u64;
+
+    create_reported_market(&env, &client.address, market_id, &admin, 3_600, 0, 0);
+
+    client.finalize_resolution(&market_id);
+}
+
+#[test]
+#[should_panic]
+fn test_finalize_resolution_called_twice_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (admin, client) = setup_test(&env);
+    let market_id = 78u64;
+
+    create_reported_market(&env, &client.address, market_id, &admin, 0, 0, 1);
+
+    client.finalize_resolution(&market_id);
+    client.finalize_resolution(&market_id);
+}
+
+#[test]
+#[should_panic]
+fn test_emergency_resolve_non_admin_rejected() {
+    let env = Env::default();
+
+    let (admin, client) = setup_test(&env);
+    let market_id = 79u64;
+
+    // NOTE: intentionally do not call env.mock_all_auths(); this should fail admin auth.
+    create_reported_market(&env, &client.address, market_id, &admin, 0, 0, 0);
+
+    client.emergency_resolve(&market_id, &0u32);
 }
 
 #[test]

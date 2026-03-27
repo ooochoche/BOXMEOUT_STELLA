@@ -19,6 +19,26 @@ const MAX_IMAGE_URL_LEN: u32 = 256;
 const MAX_DESCRIPTION_LEN: u32 = 1_024;
 const MAX_SOURCE_URL_LEN: u32 = 256;
 
+fn compute_market_fee_pools(
+    total_collateral: i128,
+    fee_config: &FeeConfig,
+) -> Result<(i128, i128, i128), PredictionMarketError> {
+    let protocol_fee = total_collateral
+        .checked_mul(fee_config.protocol_fee_bps as i128)
+        .and_then(|x| x.checked_div(10_000))
+        .ok_or(PredictionMarketError::ArithmeticError)?;
+    let lp_fee = total_collateral
+        .checked_mul(fee_config.lp_fee_bps as i128)
+        .and_then(|x| x.checked_div(10_000))
+        .ok_or(PredictionMarketError::ArithmeticError)?;
+    let creator_fee = total_collateral
+        .checked_mul(fee_config.creator_fee_bps as i128)
+        .and_then(|x| x.checked_div(10_000))
+        .ok_or(PredictionMarketError::ArithmeticError)?;
+
+    Ok((protocol_fee, lp_fee, creator_fee))
+}
+
 fn load_config(env: &Env) -> Result<Config, PredictionMarketError> {
     env.storage()
         .persistent()
@@ -1047,7 +1067,37 @@ impl PredictionMarketContract {
         env: Env,
         market_id: u64,
     ) -> Result<i128, PredictionMarketError> {
-        todo!("Implement protocol fee collection to treasury")
+        let config = load_config(&env)?;
+
+        config.admin.require_auth();
+
+        let mut market: Market = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Market(market_id))
+            .ok_or(PredictionMarketError::MarketNotFound)?;
+
+        if market.status != MarketStatus::Resolved && market.status != MarketStatus::Cancelled {
+            return Err(PredictionMarketError::InvalidMarketStatus);
+        }
+
+        if market.protocol_fee_pool <= 0 {
+            return Err(PredictionMarketError::NoFeesToCollect);
+        }
+
+        let amount = market.protocol_fee_pool;
+
+        let token_client = soroban_sdk::token::TokenClient::new(&env, &config.token);
+        token_client.transfer(&env.current_contract_address(), &config.treasury, &amount);
+
+        market.protocol_fee_pool = 0;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Market(market_id), &market);
+
+        events::protocol_fees_collected(&env, market_id, config.treasury, amount);
+
+        Ok(amount)
     }
 
     /// Market creator collects their share of creator fees.
@@ -1636,7 +1686,76 @@ impl PredictionMarketContract {
         env: Env,
         market_id: u64,
     ) -> Result<(), PredictionMarketError> {
-        todo!("Implement permissionless finalisation after dispute window")
+        let config = load_config(&env)?;
+
+        let mut market: Market = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Market(market_id))
+            .ok_or(PredictionMarketError::MarketNotFound)?;
+
+        if market.status != MarketStatus::Reported {
+            return Err(PredictionMarketError::MarketNotReported);
+        }
+
+        let report: OracleReport = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleReport(market_id))
+            .ok_or(PredictionMarketError::MarketNotReported)?;
+
+        if report.disputed {
+            return Err(PredictionMarketError::DisputeAlreadyExists);
+        }
+
+        if (report.proposed_outcome_id as usize) >= market.outcomes.len() as usize {
+            return Err(PredictionMarketError::InvalidOutcome);
+        }
+
+        let now = env.ledger().timestamp();
+        let dispute_window_end = report
+            .reported_at
+            .checked_add(market.dispute_window_secs)
+            .ok_or(PredictionMarketError::ArithmeticError)?;
+        if now < dispute_window_end {
+            return Err(PredictionMarketError::DisputeWindowActive);
+        }
+
+        let (protocol_fee, lp_fee, creator_fee) =
+            compute_market_fee_pools(market.total_collateral, &config.fee_config)?;
+
+        market.protocol_fee_pool = protocol_fee;
+        market.lp_fee_pool = lp_fee;
+        market.creator_fee_pool = creator_fee;
+
+        if market.total_lp_shares > 0 && lp_fee > 0 {
+            let fee_per_share_delta = lp_fee
+                .checked_mul(crate::math::SCALE)
+                .and_then(|x| x.checked_div(market.total_lp_shares))
+                .ok_or(PredictionMarketError::ArithmeticError)?;
+
+            let current_fee_per_share: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LpFeePerShare(market_id))
+                .unwrap_or(0);
+            let new_fee_per_share = current_fee_per_share
+                .checked_add(fee_per_share_delta)
+                .ok_or(PredictionMarketError::ArithmeticError)?;
+            env.storage()
+                .persistent()
+                .set(&DataKey::LpFeePerShare(market_id), &new_fee_per_share);
+        }
+
+        market.winning_outcome_id = Some(report.proposed_outcome_id);
+        market.status = MarketStatus::Resolved;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Market(market_id), &market);
+
+        events::market_finalized(&env, market_id, report.proposed_outcome_id);
+
+        Ok(())
     }
 
     /// Admin emergency-resolves a market, bypassing the oracle and dispute flow.
@@ -1655,7 +1774,61 @@ impl PredictionMarketContract {
         market_id: u64,
         winning_outcome_id: u32,
     ) -> Result<(), PredictionMarketError> {
-        todo!("Implement admin emergency resolution bypassing oracle/dispute")
+        let config = load_config(&env)?;
+
+        config.admin.require_auth();
+
+        let mut market: Market = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Market(market_id))
+            .ok_or(PredictionMarketError::MarketNotFound)?;
+
+        if market.status == MarketStatus::Resolved {
+            return Err(PredictionMarketError::AlreadyResolved);
+        }
+        if market.status == MarketStatus::Cancelled {
+            return Err(PredictionMarketError::AlreadyCancelled);
+        }
+        if (winning_outcome_id as usize) >= market.outcomes.len() as usize {
+            return Err(PredictionMarketError::InvalidOutcome);
+        }
+
+        let (protocol_fee, lp_fee, creator_fee) =
+            compute_market_fee_pools(market.total_collateral, &config.fee_config)?;
+
+        market.protocol_fee_pool = protocol_fee;
+        market.lp_fee_pool = lp_fee;
+        market.creator_fee_pool = creator_fee;
+
+        if market.total_lp_shares > 0 && lp_fee > 0 {
+            let fee_per_share_delta = lp_fee
+                .checked_mul(crate::math::SCALE)
+                .and_then(|x| x.checked_div(market.total_lp_shares))
+                .ok_or(PredictionMarketError::ArithmeticError)?;
+
+            let current_fee_per_share: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LpFeePerShare(market_id))
+                .unwrap_or(0);
+            let new_fee_per_share = current_fee_per_share
+                .checked_add(fee_per_share_delta)
+                .ok_or(PredictionMarketError::ArithmeticError)?;
+            env.storage()
+                .persistent()
+                .set(&DataKey::LpFeePerShare(market_id), &new_fee_per_share);
+        }
+
+        market.winning_outcome_id = Some(winning_outcome_id);
+        market.status = MarketStatus::Resolved;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Market(market_id), &market);
+
+        events::market_emergency_resolved(&env, market_id, winning_outcome_id, config.admin);
+
+        Ok(())
     }
 
     // =========================================================================
