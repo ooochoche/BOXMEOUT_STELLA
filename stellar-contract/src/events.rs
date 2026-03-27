@@ -216,7 +216,11 @@ pub fn market_cancelled(env: &Env, market_id: u64, cancelled_by: Address) {
 /// - Topics: [symbol!("mkt_final"), market_id as Symbol]
 /// - Data:   (market_id: u64, winning_outcome_id: u32, finalized_at: u64)
 pub fn market_finalized(env: &Env, market_id: u64, winning_outcome_id: u32) {
-    todo!("Emit market_finalized event")
+    #[allow(deprecated)]
+    env.events().publish(
+        (Symbol::new(env, "mkt_final"), market_id),
+        (market_id, winning_outcome_id, env.ledger().timestamp()),
+    );
 }
 
 /// Emitted when admin uses the emergency resolve bypass.
@@ -230,7 +234,11 @@ pub fn market_emergency_resolved(
     winning_outcome_id: u32,
     admin: Address,
 ) {
-    todo!("Emit market_emergency_resolved event")
+    #[allow(deprecated)]
+    env.events().publish(
+        (Symbol::new(env, "emrg_resolve"), market_id),
+        (market_id, winning_outcome_id, admin),
+    );
 }
 
 // =============================================================================
@@ -454,7 +462,11 @@ pub fn lp_fees_claimed(env: &Env, market_id: u64, provider: Address, fees_claime
 /// - Topics: [symbol!("proto_fees"), market_id as Symbol]
 /// - Data:   (market_id: u64, treasury: Address, amount: i128)
 pub fn protocol_fees_collected(env: &Env, market_id: u64, treasury: Address, amount: i128) {
-    todo!("Emit protocol_fees_collected event")
+    #[allow(deprecated)]
+    env.events().publish(
+        (Symbol::new(env, "proto_fees"), market_id),
+        (market_id, treasury, amount),
+    );
 }
 
 /// Emitted when the market creator collects their fees.
