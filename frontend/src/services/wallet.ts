@@ -27,6 +27,22 @@ const NETWORK_PASSPHRASE =
 
 const LS_KEY = 'boxmeout_wallet_address';
 
+// ─── Custom Errors ───────────────────────────────────────────────────────────
+
+export class WalletSignError extends Error {
+  constructor(message: string = 'User rejected transaction signing') {
+    super(message);
+    this.name = 'WalletSignError';
+  }
+}
+
+export class TxSubmissionError extends Error {
+  constructor(message: string, public readonly details?: unknown) {
+    super(message);
+    this.name = 'TxSubmissionError';
+  }
+}
+
 // ─── Transaction helper ───────────────────────────────────────────────────────
 
 async function buildAndSubmit(
@@ -55,19 +71,33 @@ async function buildAndSubmit(
   const freighter = (window as any).freighter;
   if (!freighter) throw new Error('WalletNotInstalledError');
 
-  const { signedTxXdr } = await freighter.signTransaction(txXdr, {
-    networkPassphrase: NETWORK_PASSPHRASE,
-  });
+  // Sign with Freighter, capturing signing errors
+  let signedTxXdr: string;
+  try {
+    const result = await freighter.signTransaction(txXdr, {
+      networkPassphrase: NETWORK_PASSPHRASE,
+    });
+    signedTxXdr = result.signedTxXdr;
+  } catch (error) {
+    // Freighter throws when user rejects signing
+    throw new WalletSignError(
+      error instanceof Error ? error.message : 'User rejected transaction signing',
+    );
+  }
 
+  // Submit signed transaction to Stellar network
   const submitRes = await server.sendTransaction(
     TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE),
   );
 
   if (submitRes.status === 'ERROR') {
-    throw new Error(`TxSubmissionError: ${submitRes.errorResult?.toXDR()}`);
+    throw new TxSubmissionError(
+      `Network rejected transaction: ${submitRes.errorResult?.toString() || 'Unknown error'}`,
+      submitRes.errorResult,
+    );
   }
 
-  // Poll for confirmation
+  // Poll for transaction confirmation (max 30 seconds = 20 polls * 1.5s)
   let getRes = await server.getTransaction(submitRes.hash);
   for (let i = 0; i < 20 && getRes.status === 'NOT_FOUND'; i++) {
     await new Promise((r) => setTimeout(r, 1500));
@@ -75,7 +105,10 @@ async function buildAndSubmit(
   }
 
   if (getRes.status !== 'SUCCESS') {
-    throw new Error(`TxSubmissionError: transaction ${getRes.status}`);
+    throw new TxSubmissionError(
+      `Transaction failed with status: ${getRes.status}`,
+      getRes,
+    );
   }
 
   return submitRes.hash;
