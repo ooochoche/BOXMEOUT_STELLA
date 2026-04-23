@@ -14,6 +14,14 @@ import type {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
+export class NotFoundError extends Error {
+  constructor(message = 'Not found') { super(message); this.name = 'NotFoundError'; }
+}
+
+export class NetworkError extends Error {
+  constructor(message = 'Network error') { super(message); this.name = 'NetworkError'; }
+}
+
 export interface MarketFilters {
   status?: string;
   weight_class?: string;
@@ -49,7 +57,15 @@ export async function fetchMarkets(
  * Throws NotFoundError on 404.
  */
 export async function fetchMarketById(market_id: string): Promise<Market> {
-  // TODO: implement
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/markets/${market_id}`);
+  } catch (e) {
+    throw new NetworkError((e as Error).message);
+  }
+  if (res.status === 404) throw new NotFoundError(`Market ${market_id} not found`);
+  if (!res.ok) throw new NetworkError(`Unexpected response: ${res.status}`);
+  return res.json() as Promise<Market>;
 }
 
 /**
