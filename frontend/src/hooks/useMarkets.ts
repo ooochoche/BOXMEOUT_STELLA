@@ -9,6 +9,8 @@ import type { Market } from '../types';
 import type { MarketFilters } from '../services/api';
 import { fetchMarkets } from '../services/api';
 
+const POLL_INTERVAL = 30_000;
+
 export interface UseMarketsResult {
   markets: Market[];
   total: number;
@@ -56,7 +58,7 @@ export function useMarkets(filters?: MarketFilters): UseMarketsResult {
     // Set up polling interval every 30 seconds
     const intervalId = setInterval(() => {
       fetchAndUpdate();
-    }, 30_000);
+    }, POLL_INTERVAL);
 
     return () => {
       clearInterval(intervalId);

@@ -5,11 +5,6 @@
 
 'use client';
 
-// ============================================================
-// BOXMEOUT — Home Page (/  )
-// Lists all boxing markets with filters and sorting.
-// ============================================================
-
 import { useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMarkets } from '../hooks/useMarkets';
