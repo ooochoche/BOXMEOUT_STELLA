@@ -15,7 +15,7 @@ interface MarketCardProps {
 }
 
 export function MarketCard({ market }: MarketCardProps): JSX.Element {
-  const totalXlm = (parseInt(market.total_pool, 10) / 1e7).toFixed(2);
+  const totalXlm = Math.floor(parseInt(market.total_pool, 10) / 1e7).toLocaleString();
 
   return (
     <Link
